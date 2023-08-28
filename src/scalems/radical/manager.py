@@ -16,6 +16,7 @@ import os
 import queue as _queue
 import threading
 import typing
+import warnings
 import weakref
 from time import monotonic as monotonic
 
@@ -176,6 +177,9 @@ class CommandItem:
         self.future = future
         self.message = cpi_call
 
+    def __repr__(self):
+        return f"<CommandItem future:{repr(self.future)} message:'{self.message}'>"
+
     def run(self, raptor: rp.raptor_tasks.Raptor):
         """Set up the Tasks necessary to fulfill the Future."""
         if not self.future.set_running_or_notify_cancel():
@@ -183,14 +187,14 @@ class CommandItem:
         try:
             if raptor is None or raptor.state in rp.FINAL:
                 raise scalems.exceptions.ScopeError("Cannot issue control commands without an active Raptor session.")
-            logger.debug(f"Preparing command for {repr(raptor)}.")
+            logger.debug(f"Preparing command {repr(self)} for {repr(raptor)}.")
             message = scalems.cpi.to_raptor_task_metadata(self.message)
             task_description = rp.TaskDescription(
                 from_dict={
                     "raptor_id": raptor.uid,
                     "mode": scalems.radical.raptor.CPI_MESSAGE,
                     "metadata": message,
-                    "uid": EphemeralIdentifier(),
+                    "uid": str(EphemeralIdentifier()),
                 }
             )
 
@@ -246,8 +250,12 @@ def _cpi_task_callback(task: rp.Task, state, *, future: concurrent.futures.Futur
             # just throw one here.
             # This stack trace is as good as any.
             try:
+                logger.error(f"Failed CPI call for task {task.as_dict()}")
                 cpi_call = scalems.cpi.from_raptor_task_metadata(task.description["metadata"])
-                raise CPIException(f"CPI call {task.uid} failed to process command {cpi_call}")
+                message = f"CPI call {task.uid} failed to process command {cpi_call}"
+                if result.exception:
+                    message += f" {result.exception}"
+                raise CPIException(message)
             except Exception as e:
                 future.set_exception(e)
                 # There may be other circular references through the exception
@@ -417,6 +425,8 @@ class RuntimeManager:
                     logger.debug(f"Waiting to acquire {cores} cores from {self}.")
                 self._resource_pool["pilot_cores"] -= cores
                 token = ResourceToken(cpu_cores=cores)
+                # PyCharm 2023.2 seems to have some bugs with optional arguments
+                # noinspection PyTypeChecker
                 _finalizer = weakref.finalize(
                     token,
                     logger.critical,
@@ -432,11 +442,14 @@ class RuntimeManager:
         """
         if token is None:
             # During shutdown, a pending `acquire()` may produce a null token.
+            logger.debug("RuntimeManager.release() called with null token.")
             return
+        if token not in self._tokens:
+            logger.error(f"{token} is not valid with this RuntimeManager.")
+            return
+        logger.debug("Acquiring lock for RuntimeManager._resource_pool_update_condition.")
         with self._resource_pool_update_condition:
-            if token not in self._tokens:
-                logger.error(f"{token} is not valid with this RuntimeManager.")
-                return
+            logger.debug(f"Releasing token {token} <object id {id(token)}")
             self._tokens[token].detach()
             del self._tokens[token]
             self._resource_pool["pilot_cores"] += token.cpu_cores
@@ -489,6 +502,8 @@ class RuntimeManager:
             #  reach the desired state. (Add some Events to the RuntimeSession facility.)
             # WARNING: rp.Task.wait() *state* parameter does not handle tuples, but does not
             # check type.
+            # PyCharm 2023.2 seems to have some bugs with optional arguments
+            # noinspection PyTypeChecker
             _task = asyncio.create_task(
                 asyncio.to_thread(raptor.wait, state=[rp.states.AGENT_EXECUTING] + rp.FINAL),
                 name="check-Master-started",
@@ -540,11 +555,11 @@ class RuntimeManager:
             _runtime_queues[t] = command_queue
             return cpi_session
         finally:
-            logger.debug("Releasing unused resource token.")
             if resource_token is not None:
+                logger.debug("Releasing unused resource token.")
                 self.release(resource_token)
 
-    async def cpi(self, session: CPISession, cpi_call: scalems.cpi.CpiCall):
+    async def cpi(self, session: CPISession, cpi_call: scalems.cpi.CpiCall) -> concurrent.futures.Future[CPIResult]:
         """Send a control command to the raptor scheduler.
 
         Replaces :py:func:`scalems.execution.RuntimeManager.cpi()`
@@ -554,6 +569,8 @@ class RuntimeManager:
         TODO: Unify with new raptor rpc features.
         See https://github.com/radical-cybertools/radical.pilot/blob/devel/examples/misc/raptor_simple.py
         """
+        # PyCharm 2023.2 seems to have some bugs with optional arguments
+        # noinspection PyArgumentList
         async with async_lock_proxy(self._shutdown_lock, event_loop=self._loop):
             if self._shutdown:
                 raise scalems.exceptions.APIError("Cannot accept CPI calls after starting shutdown.")
@@ -573,6 +590,8 @@ class RuntimeManager:
             # TODO: Add some bookkeeping callbacks.
 
             queue_item = CommandItem(future=cpi_future, cpi_call=cpi_call)
+            # PyCharm 2023.2 seems to have some bugs with optional arguments
+            # noinspection PyTypeChecker
             await asyncio.to_thread(cpi_queue.put, queue_item)
 
             # TODO: Ref Executor.submit() for appropriate health checks.
@@ -683,6 +702,8 @@ class RuntimeManager:
 
     @contextlib.asynccontextmanager
     async def async_shutdown_lock(self):
+        # PyCharm 2023.2 seems to have some bugs with optional arguments
+        # noinspection PyArgumentList
         async with (
             async_lock_proxy(lock=_global_shutdown_lock, event_loop=self._loop),
             async_lock_proxy(lock=self._shutdown_lock, event_loop=self._loop),
@@ -884,6 +905,8 @@ def manage_raptor(
             )
         except BaseException:
             logger.critical("Leaving queue runner due to exception.", exc_info=True)
+        else:
+            logger.debug("Queue runner completed.")
 
         if (
             raptor is not None
@@ -895,7 +918,9 @@ def manage_raptor(
             _shutdown_raptor(cpi_session_reference())
     finally:
         _runtime_manager: RuntimeManager = manager_reference()
-        if _runtime_manager is not None and resource_token is not None:
+        if _runtime_manager is None:
+            logger.debug(f"RuntimeManager disappeared before token {resource_token} could be released.")
+        else:
             _runtime_manager.release(resource_token)
 
 
@@ -958,7 +983,7 @@ def _run_queue(
     manager_reference: weakref.ReferenceType[RuntimeManager],
 ):
     """Loop until *work_queue* contains a STOP command or None."""
-    cpi_session = cpi_session_reference()
+    cpi_session: CPISession = cpi_session_reference()
     if cpi_session is None:
         return
     command_queue: _queue.SimpleQueue[CommandItem] = cpi_session.command_queue
@@ -982,6 +1007,7 @@ def _run_queue(
                 # freed or errors can be logged, etc.
                 try:
                     command.run(raptor=raptor)
+                    # TODO: Need a harder END command.
                     # TODO: Separate responsibilities of (a) managing Raptor and queue from (b) CPI semantics.
                     if command.message == "stop":
                         stop_issued.set()
@@ -997,6 +1023,7 @@ def _run_queue(
 
             if raptor.state in rp.FINAL and not stop_issued.is_set():
                 failed.set()
+                logger.debug("Queue runner detected failure.")
             else:
                 # Don't hang onto the reference while waiting on queue.get()
                 del command
@@ -1026,13 +1053,18 @@ def _run_queue(
         #   - The interpreter is shutting down OR
         #   - The manager that owns the worker has been collected OR
         #   - The manager that owns the worker has been shutdown.
+        #   - TODO: The CPI Session is shutting down / Raptor task has ended.
+        #      Make sure roptor done callback results in a None on the queue and an event we check below.
         if (_manager := manager_reference()) is None or _shutdown or _manager._shutdown:
             if _manager is not None:
                 _manager._shutdown = True
             del _manager
             break
+        elif failed.is_set() or stop_issued.is_set():
+            # TODO: Clarify different degrees of STOP.
+            break
         else:
             # This is the logic in concurrent.futures.ThreadPoolExecutor. I'm not sure
             # why it is useful. If we see this warning in practice, we can try to understand
             # the behavior better and replace this warning with better design notes.
-            logger.warning("Executor thread found queued None item, but was not directed to shut down.")
+            warnings.warn("Executor thread found queued None item, but was not directed to shut down.")
