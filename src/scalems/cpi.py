@@ -2,6 +2,23 @@
 
 The data model is immature and evolving. Use the utility functions to create,
 encode/decode, and interpret objects.
+
+Represent CPI commands (:py:class:`CpiCall` instances) with
+
+* `hello`
+* `add_item`
+* `start_scope`
+* `exit_scope`
+* `stop`
+
+Encode CPI command instances with `to_raptor_task_metadata`.
+
+Decode CPI commands with `from_raptor_task_metadata`.
+
+Construct command arguments with
+
+* `worker_requirements`
+
 """
 
 from __future__ import annotations
@@ -17,6 +34,7 @@ __all__ = (
     "stop",
     "to_raptor_task_metadata",
     "from_raptor_task_metadata",
+    "worker_requirements",
 )
 
 import typing
@@ -34,41 +52,6 @@ class CpiCall(typing.TypedDict):
 
 class CpiResponse(typing.TypedDict):
     message: typing.Optional[dict]
-
-
-def hello():
-    """Elicit a response from the servicer.
-
-    The response type is not (yet) specified, but a non-null non-False response
-    indicates that the servicer is known to be ready to accept work.
-    """
-    return CpiCall(operation="hello", operand=None)
-
-
-def stop():
-    """Direct the servicer to shut down cleanly.
-
-    The client declares it will not ask for additional resources.
-
-    After STOP, no new work will be accepted from the client, though channel may remain open
-    until a firmer END is issued or until disconnected at either end.
-    Idempotent."""
-    return CpiCall(operation="stop", operand=None)
-
-
-def add_item(item):
-    # In prototyping, we used a TypedDict (scalems.radical.raptor.ScalemsRaptorWorkItem)
-    # but we aren't really using this operation yet, and we should promote the specification
-    # of the operand type to a scope such as this module before expanding its use.
-    #
-    # Among the shortcomings of the current scheme are insufficient data for describing a
-    # RP Task. At the very least, we need to include the number of processes, number of cores
-    # per process, GPU requirements, process type (rp.SERIAL vs. rp.MPI), and threading type.
-    #
-    # For now:
-    if not all(key in item for key in ("func", "module", "args", "kwargs", "comm_arg_name")):
-        raise ValueError("Unexpected operand for 'add_item'.")
-    return CpiCall(operation="add_item", operand=item)
 
 
 class WorkerRequirements(typing.TypedDict):
@@ -152,6 +135,56 @@ class ScopeDescription(typing.TypedDict):
     worker_uids: list[str]
 
 
+def add_item(item):
+    # In prototyping, we used a TypedDict (scalems.radical.raptor.ScalemsRaptorWorkItem)
+    # but we aren't really using this operation yet, and we should promote the specification
+    # of the operand type to a scope such as this module before expanding its use.
+    #
+    # Among the shortcomings of the current scheme are insufficient data for describing a
+    # RP Task. At the very least, we need to include the number of processes, number of cores
+    # per process, GPU requirements, process type (rp.SERIAL vs. rp.MPI), and threading type.
+    #
+    # For now:
+    if not all(key in item for key in ("func", "module", "args", "kwargs", "comm_arg_name")):
+        raise ValueError("Unexpected operand for 'add_item'.")
+    return CpiCall(operation="add_item", operand=item)
+
+
+def exit_scope(scope_id: str):
+    """Declare the end of a CPI session scope.
+
+    Following a START_SCOPE command, declare that no further tasks will be submitted
+    by the client under the named Scope. Allow the Executor to release resources
+    as remaining tasks complete.
+
+    The message payload is a string identifying the resource allocation scope to exit.
+
+    Resources will be deallocated when the executor associated with the scope has
+    no more queued work, or as soon as possible after a STOP is received.
+
+    After an EXIT_SCOPE is received, the remote CPI servicer will shut itself down
+    cleanly once there is no more work to do. Note that this behavior implies that
+    delivery of a final report or Runtime status is beyond the scope of this set
+    of CPI commands unless we split this into two *required* commands. Any reporting
+    through CPI commands needs to be from a Task that completes before shutting
+    down the remote end of the CPI servicer.
+
+    Design note:
+        As of the initial implementation, we do not have a way to shut down Workers
+        from the Raptor task separately from the Raptor termination.
+    """
+    return CpiCall(operation="exit_scope", operand={"scope_id": scope_id})
+
+
+def hello():
+    """Elicit a response from the servicer.
+
+    The response type is not (yet) specified, but a non-null non-False response
+    indicates that the servicer is known to be ready to accept work.
+    """
+    return CpiCall(operation="hello", operand=None)
+
+
 def start_scope(requirements: ScopeRequirements):
     """Enter a CPI scope for the indicated work load requirements.
 
@@ -178,19 +211,25 @@ def start_scope(requirements: ScopeRequirements):
     return CpiCall(operation="start_scope", operand=requirements)
 
 
-def exit_scope(scope_id: str):
-    """Declare the end of a CPI session scope.
+def stop():
+    """Direct the servicer to shut down quickly.
 
-    Following a START_SCOPE command, declare that no further tasks will be submitted
-    by the client under the named Scope. Allow the Executor to release resources
-    as remaining tasks complete.
+    Incomplete tasks will be canceled.
 
-    The message payload is a string identifying the resource allocation scope to exit.
+    The purpose of this command is to direct the CPI servicer to release resources
+    as soon as possible, while still allowing the remote processes a chance to terminate
+    cleanly and produce valid filesystem artifacts.
 
-    Resources will be deallocated when the executor associated with the scope has
-    no more queued work, or as soon as possible after a STOP is received.
-    """
-    return CpiCall(operation="exit_scope", operand={"scope_id": scope_id})
+    To allow submitted Tasks to complete, see `exit_scope`.
+
+    Design Note:
+        The mechanism of Task cancellation is not yet well specified. It is unclear
+        what state the workflow metadata will be in after the STOP is processed.
+
+    After STOP, no new work will be accepted from the client, though channel may remain open
+    until a firmer END is issued or until disconnected at either end.
+    Idempotent."""
+    return CpiCall(operation="stop", operand=None)
 
 
 def to_raptor_task_metadata(obj: CpiCall) -> tuple[str, None | dict]:
