@@ -249,6 +249,7 @@ __all__ = (
     "ClientWorkerRequirements",
     "RaptorConfiguration",
     "raptor_input",
+    "raptor_input_sync",
     "worker_requirements_from_start_scope",
     "worker_description",
     "SoftwareCompatibilityError",
@@ -793,6 +794,51 @@ def _(obj: RaptorConfiguration) -> dict:
     return dataclasses.asdict(obj)
 
 
+def raptor_input_sync(
+    *,
+    filestore: _store.FileStore,
+) -> _file.AbstractFileReference:
+    """Provide the input file for a SCALE-MS Raptor script.
+
+    The resulting configuration file is staged with the Raptor scheduler task and
+    provided as a command line argument. Most information can be provided after the
+    Raptor starts (through CPI commands), moving forward, but we retain this input
+    mechanism for now.
+
+    Produces a file containing a serialized `RaptorConfiguration`.
+
+    Args:
+        filestore: (local) FileStore that will manage the generated AbstractFileReference.
+    """
+    if not isinstance(filestore, _store.FileStore) or filestore.closed or not filestore.directory.exists():
+        raise ValueError(f"{filestore} is not a usable FileStore.")
+
+    # TODO(#141): Add additional dependencies that we can infer from the workflow.
+    versioned_modules = (("mpi4py", "3.0.0"), ("scalems", scalems.__version__), ("radical.pilot", rp.version))
+
+    configuration = RaptorConfiguration(versioned_modules=list(versioned_modules))
+
+    # Make sure the temporary directory is on the same filesystem as the local workflow.
+    tmp_base = filestore.directory
+    # TODO(Python 3.10) Use `ignore_cleanup_errors=True`
+    tmpdir_manager = tempfile.TemporaryDirectory(dir=tmp_base)
+    with tmpdir_manager as tmpdir:
+        # Serialize the configuration to a temporary file, then add it to the
+        # FileStore to get a fingerprinted, tracked file.
+        config_file_name = "raptor_scheduler_config.json"
+        config_file_path = os.path.join(tmpdir, config_file_name)
+        with open(config_file_path, "w") as fh:
+            json.dump(configuration, fh, default=object_encoder, indent=2)
+        file_description = _file.describe_file(config_file_path, mode="r")
+        add_file = _store.get_file_reference_by_path(pathlib.Path(file_description), filestore=filestore)
+        try:
+            tmpdir_manager.cleanup()
+        except OSError:
+            logger.exception(f"Errors occurred while cleaning up {tmpdir}.")
+
+    return add_file
+
+
 async def raptor_input(
     *,
     filestore: _store.FileStore,
@@ -869,7 +915,7 @@ def worker_requirements_from_start_scope(
         gpus_per_rank: float = total_gpus / cpu_processes
 
         client_worker_requirements = ClientWorkerRequirements(
-            named_env=None,
+            named_env='scalems_env',
             pre_exec=pre_exec,
             cores_per_process=cores_per_process,
             cpu_processes=cpu_processes,
@@ -2015,11 +2061,15 @@ async def coro_get_scheduler(
     td.output_staging = []  # TODO(#229) Write and stage output from raptor task.
     td.stage_on_error = True
 
+    from datetime import datetime
+    print(f"before {datetime.now()}")
     td.pre_exec = list(pre_exec)
+    print(f"after {datetime.now()}")
 
     # We are not using prepare_env at this point. We use the `venv` configured by the
     # caller.
     # td.named_env = 'scalems_env'
+    td.named_env = "scalems_env"
 
     td.executable = "python3"
     td.arguments = []
@@ -2137,6 +2187,7 @@ def launch_scheduler(
     # We are not using prepare_env at this point. We use the `venv` configured by the
     # caller.
     # td.named_env = 'scalems_env'
+    td.named_env = "scalems_env"
 
     td.executable = "python3"
     td.arguments = []

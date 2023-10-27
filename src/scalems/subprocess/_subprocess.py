@@ -267,6 +267,8 @@ class Subprocess:
 @scalems.workflow.workflow_item_director_factory.register
 def _(item: Subprocess, *, manager: scalems.workflow.WorkflowManager, label: str = None):
     if not isinstance(manager, scalems.workflow.WorkflowManager):
+        import traceback as tb
+        tb.print_stack()
         raise APIError(f"No director for {repr(manager)}")
 
     def director(*args, **kwargs):

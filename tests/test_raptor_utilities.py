@@ -74,9 +74,9 @@ def test_master_configuration_details(rp_venv):
     with pytest.warns(match="raptor.Master base class"):
         master = ScaleMSRaptor(configuration)
     # Note: *named_env* is unused, pending work on #90 and others.
-    worker_requirements = ClientWorkerRequirements(
+    worker_requirements = [ClientWorkerRequirements(
         named_env="scalems_test_ve", cpu_processes=worker_processes, cores_per_process=1, gpus_per_rank=gpus_per_process
-    )
+    )]
 
     with master.configure_worker(worker_requirements) as worker_configs:
         assert len(worker_configs) == num_workers

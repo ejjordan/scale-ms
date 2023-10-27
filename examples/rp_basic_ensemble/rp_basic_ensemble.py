@@ -271,7 +271,7 @@ class MDRun:
                 label=task_uid,
                 args=args,
                 kwargs=kwargs,
-                manager=manager,
+                datastore=manager.datastore(),
                 requirements=requirements,
             )
         )

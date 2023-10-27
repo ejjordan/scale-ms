@@ -210,6 +210,7 @@ async def _rp_task_watcher(task: rp.Task, final: RPFinalTaskState, ready: asynci
                     if logger.getEffectiveLevel() <= logging.DEBUG:
                         for key, value in task.as_dict().items():
                             logger.debug(f"    {key}: {str(value)}")
+                    import ipdb;ipdb.set_trace()
                     message = f"{task.uid} failed."
                     if task.exit_code is not None:
                         message += f" Exit code {task.exit_code}."
@@ -385,7 +386,7 @@ async def subprocess_to_rp_task(
         uid=call_handle.uid,
         executable=call_handle.executable,
         arguments=list(call_handle.arguments),
-        pre_exec=list(get_pre_exec(dispatcher.configuration())),
+        #pre_exec=list(get_pre_exec(dispatcher.configuration())),
         mode=rp.TASK_EXECUTABLE,
     )
     if config.enable_raptor:
@@ -426,8 +427,11 @@ async def subprocess_to_rp_task(
         raise ValueError("Invalid attribute for RP TaskDescription.") from e
 
     task_cores = subprocess_task_description.cores_per_rank * subprocess_task_description.cpu_processes
-    rm_info: RmInfo = await dispatcher.runtime.resources
-    pilot_cores = rm_info["requested_cores"]
+    if type(dispatcher.runtime.resources) is dict:
+        pilot_cores = dispatcher.runtime.resources["requested_cores"]
+    else:
+        rm_info: RmInfo = await dispatcher.runtime.resources
+        pilot_cores = rm_info["requested_cores"]
     # TODO: Account for Worker cores.
     if config.enable_raptor:
         raptor_task: rp.Task = dispatcher.raptor
@@ -443,6 +447,8 @@ async def subprocess_to_rp_task(
     #     supporting_task = await rp_manager.add_task(task_description)
     #     supporting_task.add_done_callback(...)
     task_manager = dispatcher.runtime.task_manager()
+    #mytask=task_manager.submit_tasks([subprocess_task_description])[0]
+    #import ipdb;ipdb.set_trace()
     (submitted_task,) = await asyncio.to_thread(task_manager.submit_tasks, [subprocess_task_description])
     subprocess_task_future: asyncio.Task[rp.Task] = await rp_task(submitted_task)
 
@@ -646,6 +652,7 @@ def _describe_legacy_task(item: scalems.workflow.Task, pre_exec: list) -> rp.Tas
     #     task_description.pre_exec = ...
     # or
     #     task_description.named_env = ...
+    task_description.named_env = "scalems_env"
 
     # TODO: Interpret item details and derive appropriate staging directives.
     task_description.input_staging = list(task_input.inputs.values())
@@ -711,6 +718,7 @@ def _describe_raptor_task(item: scalems.workflow.Task, raptor_id: str, pre_exec:
     #     task_description.pre_exec = ...
     # or
     #     task_description.named_env = ...
+    task_description.named_env = "scalems_env"
 
     # TODO: Interpret item details and derive appropriate staging directives.
     task_description.input_staging = []

@@ -91,8 +91,8 @@ async def test_raptor_cpi(rp_venv, pilot_description):
         pilot_description.resource, pilot_description.access_schema
     )
     launch_method = job_endpoint.scheme
-    if launch_method == "fork":
-        pytest.skip("Raptor is not fully supported with 'fork'-based launch methods.")
+    #if launch_method == "fork":
+    #    pytest.skip("Raptor is not fully supported with 'fork'-based launch methods.")
 
     loop = asyncio.get_event_loop()
     loop.set_debug(True)
@@ -174,8 +174,8 @@ async def test_runtime_context_management(rp_venv, pilot_description):
         pilot_description.resource, pilot_description.access_schema
     )
     launch_method = job_endpoint.scheme
-    if launch_method == "fork":
-        pytest.skip("Raptor is not fully supported with 'fork'-based launch methods.")
+    #if launch_method == "fork":
+    #    pytest.skip("Raptor is not fully supported with 'fork'-based launch methods.")
 
     loop = asyncio.get_event_loop()
     loop.set_debug(True)

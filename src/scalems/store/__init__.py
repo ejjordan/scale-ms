@@ -21,6 +21,7 @@ __all__ = (
     "StaleFileStore",
     "filestore_generator",
     "get_file_reference",
+    "get_file_reference_by_path",
     "FileReference",
     "FileStore",
     "FileStoreManager",
@@ -409,6 +410,123 @@ class FileStore(typing.Mapping[_identifiers.ResourceIdentifier, "FileReference"]
                 return True
         return False
 
+    def add_file_sync(
+        self, obj: typing.Union[_file.AbstractFile, _file.AbstractFileReference], _name: str = None
+    ) -> FileReference:
+        """Add a file to the file store.
+
+        Not thread safe. User is responsible for serializing access, as necessary.
+
+        We require file paths to be wrapped in a special type so that we can enforce
+        that some error checking is possible before the coroutine actually runs. See
+
+        This involves placing (copying) the file, reading the file to fingerprint it,
+        and then writing metadata for the file. For clarity, we also rename the file
+        after fingerprinting to remove a layer of indirection, even though this
+        generates additional load on the filesystem.
+
+        The caller is allowed to provide a *_name* to use for the filename,
+        but this is strongly discouraged. The file will still be fingerprinted and the
+        caller must be sure the key is unique across all software components that may
+        by using the FileStore. (This use case should be limited to internal use or
+        core functionality to minimize namespace collisions.)
+
+        If the file is provided as a memory buffer or io.IOBase subclass, further
+        optimization is possible to reduce the filesystem interaction to a single
+        buffered write, but such optimizations are not provided natively by
+        FileStore.add_file(). Instead, such optimizations may be provided by utility
+        functions that produce AbstractFileReference objects that FileStore.add_file() can
+        consume.
+
+        Raises:
+            scalems.exceptions.DuplicateKeyError: if a file with the same
+                `ResourceIdentifier` is already under management.
+            StaleFileStore: if the filestore state appears invalid.
+
+        In addition to TypeError and ValueError for invalid inputs, propagates
+        exceptions raised by failed attempts to access the provided file object.
+
+        See Also:
+            :py:func:`scalems.file.describe_file()`
+
+        """
+        # Note: We can use a more effective and flexible `try: ... except: ...` check
+        # once we actually have AbstractFileReference support ready to use here, at which point
+        # we can consider removing runtime_checkable from AbstractFileReference to avoid false
+        # confidence. However, we may prefer to convert AbstractFileReference to an abc.ABC so
+        # that we can actually functools.singledispatchmethod on the provided object.
+        if isinstance(obj, _file.AbstractFileReference):
+            raise _exceptions.MissingImplementationError("AbstractFileReference input not yet supported.")
+        # Early exit check. We need to check again once we have a lock.
+        if self.closed:
+            raise StaleFileStore("Cannot add file to a closed FileStore.")
+        path: pathlib.Path = pathlib.Path(obj)
+        filename = None
+        key = None
+        _fd, tmpfile_target = tempfile.mkstemp(prefix=self._tmpfile_prefix, dir=self.datastore)
+        os.close(_fd)
+        tmpfile_target = pathlib.Path(tmpfile_target)
+        try:
+            # 1. Copy the file.
+            kwargs = dict(src=path, dst=tmpfile_target, follow_symlinks=False)
+            _path = shutil.copyfile(**kwargs)
+            assert tmpfile_target == _path
+            assert tmpfile_target.exists()
+            # We have now secured a copy of the file. We could just schedule the remaining
+            # operations and return. For the initial implementation though, we will wait
+            # until we have read the file. When optimizing for inputs that are already
+            # fingerprinted, we could return before AbstractFileReference.localize() has
+            # finished and schedule a checksum verification that localize() must wait for.
+
+            # 2. Fingerprint the file.
+            checksum = obj.fingerprint(**{})
+            identifier = _identifiers.ResourceIdentifier(checksum)
+
+            # 3. Choose a key.
+            key = str(identifier)
+
+            # 4. Write metadata.
+            if _name is None:
+                _name = key
+            filename = self.datastore.joinpath(_name)
+            with self._update_lock:
+                # Check again, now that we have the lock.
+                if self.closed:
+                    raise StaleFileStore("Cannot add file to a closed FileStore.")
+
+                if key in self._data.files:
+                    raise _exceptions.DuplicateKeyError(f"FileStore is already managing a file with key {key}.")
+                if str(filename) in self._data.files.values():
+                    raise _exceptions.DuplicateKeyError(f"FileStore already has {filename}.")
+                else:
+                    if filename.exists():
+                        raise StaleFileStore(f"Unexpected file in filestore: {filename}.")
+                os.rename(tmpfile_target, filename)
+                logger.debug(f"Placed {filename}")
+                # TODO: Enforce the setting of the "dirty" flag.
+                # We can create a stronger separation between the metadata manager and
+                # the backing data store and/or restrict assignment to use a general
+                # Data Descriptor that manages our "dirty" flag.
+                self._dirty.set()
+                self._data.files[key] = str(filename)
+
+            return FileReference(filestore=self, key=key)
+        except (_exceptions.DuplicateKeyError, StaleFileStore) as e:
+            tmpfile_target.unlink(missing_ok=True)
+            raise e
+        except Exception as e:
+            # Something went particularly wrong. Let's try to clean up as best we can.
+            logger.exception(f"Unhandled exception while trying to store {obj}")
+            if key and key in self._data.files:
+                pathlib.Path(self._data.files[key]).unlink(missing_ok=True)
+                del self._data.files[key]
+            if isinstance(filename, pathlib.Path):
+                filename.unlink(missing_ok=True)
+            raise e
+        finally:
+            if tmpfile_target.exists():
+                logger.warning(f"Temporary file left at {tmpfile_target}")
+
     async def add_file(
         self, obj: typing.Union[_file.AbstractFile, _file.AbstractFileReference], _name: str = None
     ) -> FileReference:
@@ -692,6 +810,21 @@ class FileStoreManager:
                 logger.debug(f"{self} has been closed.")
             self.filestore_generator = None
             return True
+
+def get_file_reference_by_path(obj: pathlib.Path, *, filestore: FileStore, mode="rb") -> FileReference:
+    """Get file reference, adding to filestore, if and only if necessary.
+
+    TODO: Optimize. (This call should only read and fingerprint *obj* once.)
+    """
+    obj = _file.describe_file(obj.resolve(), mode=mode)
+    try:
+        file_ref = filestore.add_file_sync(_file.describe_file(obj, mode=mode))
+    except _exceptions.DuplicateKeyError:
+        # Return the existing fileref, if it matches the fingerprint of *obj*.
+        fingerprint = obj.fingerprint()
+        key = _identifiers.ResourceIdentifier(fingerprint)
+        file_ref = filestore.get(key)
+    return file_ref
 
 
 async def _get_file_reference_by_path(obj: pathlib.Path, *, filestore: FileStore, mode="rb") -> FileReference:

@@ -290,8 +290,8 @@ def rp_configuration(request, rp_venv) -> scalems.radical.runtime_configuration.
 
     job_endpoint: ru.Url = rp.utils.misc.get_resource_job_url(resource, access_schema)
     launch_method = job_endpoint.scheme
-    if launch_method == "fork":
-        pytest.skip("Raptor is not fully supported with 'fork'-based launch methods.")
+    #if launch_method == "fork":
+    #    pytest.skip("Raptor is not fully supported with 'fork'-based launch methods.")
 
     rp_resource_params = {
         "PilotDescription": {

@@ -196,8 +196,8 @@ async def test_rp_submit(rp_venv, pilot_description):
         pilot_description.resource, pilot_description.access_schema
     )
     launch_method = job_endpoint.scheme
-    if launch_method == "fork":
-        pytest.skip("Raptor is not fully supported with 'fork'-based launch methods.")
+    #if launch_method == "fork":
+    #    pytest.skip("Raptor is not fully supported with 'fork'-based launch methods.")
 
     loop = asyncio.get_event_loop()
     loop.set_debug(True)
@@ -255,8 +255,8 @@ async def test_raptor_master(pilot_description, rp_venv):
         pilot_description.resource, pilot_description.access_schema
     )
     launch_method = job_endpoint.scheme
-    if launch_method == "fork":
-        pytest.skip("Raptor is not fully supported with 'fork'-based launch methods.")
+    #if launch_method == "fork":
+    #    pytest.skip("Raptor is not fully supported with 'fork'-based launch methods.")
 
     loop = asyncio.get_event_loop()
     loop.set_debug(True)
@@ -369,8 +369,8 @@ async def test_worker(pilot_description, rp_venv):
         pilot_description.resource, pilot_description.access_schema
     )
     launch_method = job_endpoint.scheme
-    if launch_method == "fork":
-        pytest.skip("Raptor is not fully supported with 'fork'-based launch methods.")
+    #if launch_method == "fork":
+    #    pytest.skip("Raptor is not fully supported with 'fork'-based launch methods.")
 
     loop = asyncio.get_event_loop()
     loop.set_debug(True)
@@ -477,8 +477,8 @@ async def test_rp_function(pilot_description, rp_venv, tmp_path):
         pilot_description.resource, pilot_description.access_schema
     )
     launch_method = job_endpoint.scheme
-    if launch_method == "fork":
-        pytest.skip("Raptor is not fully supported with 'fork'-based launch methods.")
+    #if launch_method == "fork":
+    #    pytest.skip("Raptor is not fully supported with 'fork'-based launch methods.")
 
     loop = asyncio.get_event_loop()
     loop.set_debug(True)

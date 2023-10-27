@@ -147,7 +147,8 @@ class RuntimeConfiguration:
             if launch_scheme == "fork":
                 message = f"RP Raptor MPI Worker not supported for '{launch_scheme}' launch method."
                 message += f" '{access}' access for {hpc_platform_label}: {job_endpoint}"
-                raise RPConfigurationError(message)
+                warnings.warn(message)
+                #raise RPConfigurationError(message)
 
 
 @functools.singledispatch

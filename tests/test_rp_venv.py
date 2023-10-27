@@ -229,3 +229,34 @@ def test_prepare_venv(rp_runtime: scalems.radical.session.RuntimeSession, sdist,
     if scalems_check_task.stderr:
         logger.debug(f"Task stderr: {scalems_check_task.stderr}")
     assert scalems_check_task.exit_code == 0
+
+
+def test_existing_venv(rp_runtime: scalems.radical.session.RuntimeSession, rp_venv):
+    """Use prepare_env() to register an existing venv."""
+    import radical.pilot as rp
+
+    logger.debug(f"Client RP version is {rp.version}.")
+
+    pilot: rp.Pilot = rp_runtime.pilot()
+
+    # Use the client-managed venv in a rp.Task with `named_env`
+    # Register venv
+    env_name = "test-env"
+    env_spec = {"type": "venv", "path": rp_venv, "setup": []}
+    pilot.prepare_env(env_name=env_name, env_spec=env_spec)
+
+    # Use the registered venv.
+    td = {
+        "executable": "python",
+        "arguments": ["-c", "import radical.pilot as rp; print(rp.version)"],
+        "named_env": env_name,
+        "pre_exec": [],
+        "stage_on_error": True,
+    }
+
+    task_manager: rp.TaskManager = rp_runtime.task_manager()
+    task = task_manager.submit_tasks([rp.TaskDescription(td)])[0]
+    task.wait(state=[rp.states.AGENT_EXECUTING] + rp.FINAL, timeout=120)
+    logger.info(f"state is {task.state}.")
+    logger.debug(f"stdout: {task.stdout}")
+    assert task.stdout.strip() == rp.version
