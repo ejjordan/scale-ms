@@ -438,8 +438,7 @@ async def subprocess_to_rp_task(
     if type(dispatcher.runtime.resources) is dict:
         pilot_cores = dispatcher.runtime.resources["requested_cores"]
     else:
-        rm_info: RmInfo = await dispatcher.runtime.resources
-        pilot_cores = rm_info["requested_cores"]
+        pilot_cores = dispatcher.runtime._pilot.resource_details["requested_cores"]
     # TODO: Account for Worker cores.
     if config.enable_raptor:
         raptor_task: rp.Task = dispatcher.raptor

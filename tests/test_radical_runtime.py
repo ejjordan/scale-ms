@@ -42,7 +42,7 @@ async def test_runtime_mismatch(pilot_description, event_loop, rp_configuration)
             original_tmgr = await event_loop.run_in_executor(None, rp.TaskManager, rp_session)
             original_tmgr.add_pilots(pilot)
 
-        assert rp_session.closed
+        assert rp_session._closed
         # This assertion may not be true:
         # assert pilot.state in rp.FINAL
         # Note that Pilot and other components may still be shutting down, but the
@@ -77,7 +77,7 @@ async def test_runtime_mismatch(pilot_description, event_loop, rp_configuration)
                 pilot.cancel()
             tmgr.close()
             pmgr.close()
-        assert rp_session.closed
+        assert rp_session._closed
 
 
 @pytest.mark.asyncio

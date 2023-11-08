@@ -662,12 +662,12 @@ class RuntimeManager:
         session: rp.Session = getattr(runtime, "session", None)
         if session is None:
             raise scalems.exceptions.APIError(f"No Session in {runtime}.")
-        if session.closed:
+        if session._closed:
             logger.error("RuntimeSession is already closed?!")
         else:
             runtime.close()
 
-            if session.closed:
+            if session._closed:
                 logger.debug(f"Session {session.uid} closed.")
             else:
                 logger.error(f"Session {session.uid} not closed!")
@@ -888,7 +888,7 @@ def manage_raptor(
         if (
             raptor is not None
             and raptor.state not in rp.FINAL
-            and not rp_session.closed
+            and not rp_session._closed
             and pilot.state not in rp.FINAL
         ):
             # shutdown raptor session:

@@ -429,7 +429,7 @@ class RPDispatchingExecutor(scalems.execution.RuntimeManager[RuntimeConfiguratio
             logger.exception("Exception while connecting RADICAL Pilot.", exc_info=e)
             raise DispatchError("Failed to launch SCALE-MS raptor task.") from e
 
-        if self.runtime is None or self.runtime.session.closed:
+        if self.runtime is None or self.runtime.session._closed:
             raise ProtocolError("Cannot process queue without a RP Session.")
 
         # Launch queue processor (proxy executor).
@@ -459,7 +459,7 @@ class RPDispatchingExecutor(scalems.execution.RuntimeManager[RuntimeConfiguratio
         session: rp.Session = getattr(runtime, "session", None)
         if session is None:
             raise scalems.exceptions.APIError(f"No Session in {runtime}.")
-        if session.closed:
+        if session._closed:
             logger.error("RuntimeSession is already closed?!")
         else:
             raptor = self.raptor
@@ -497,7 +497,7 @@ class RPDispatchingExecutor(scalems.execution.RuntimeManager[RuntimeConfiguratio
 
             runtime.close()
 
-            if session.closed:
+            if session._closed:
                 logger.debug(f"Session {session.uid} closed.")
             else:
                 logger.error(f"Session {session.uid} not closed!")

@@ -56,7 +56,7 @@ class RuntimeSession:
     _task_manager: typing.Optional[rp.TaskManager] = None
 
     def __init__(self, session: rp.Session, *, loop: asyncio.AbstractEventLoop, configuration: RuntimeConfiguration):
-        if not isinstance(session, rp.Session) or session.closed:
+        if not isinstance(session, rp.Session) or session._closed:
             raise ValueError("*session* must be an active RADICAL Pilot Session.")
         self._session = session
         # TODO(#359,#383): Call session.close in a ThreadPoolExecutor that we use for RP UI calls.
@@ -182,7 +182,7 @@ class RuntimeSession:
         if pilot_manager is None:
             # Caller should destroy and recreate Pilot if this call has to replace PilotManager.
             session = self.session
-            if session.closed:
+            if session._closed:
                 # Once rp.Session is closed, require a new RuntimeSession.
                 raise ProtocolError(f"RP Session {self.session.uid} is closed. Get a new RuntimeSession instance.")
             if self._pilot_manager is not None:
@@ -296,7 +296,7 @@ class RuntimeSession:
             APIError: for invalid RP Session configuration.
         """
         with self._new_pilot_lock:
-            if self.session.closed:
+            if self.session._closed:
                 raise APIError("Session is already closed.")
             pilot_manager = self.pilot_manager()
             if not pilot_manager:
