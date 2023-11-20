@@ -4,7 +4,6 @@ import contextlib
 import logging
 import os
 import subprocess
-from abc import abstractmethod
 from multiprocessing import Manager, Process
 from multiprocessing.managers import SyncManager
 from queue import Empty, Queue
@@ -32,18 +31,19 @@ if TYPE_CHECKING:
     TaskTuple = Tuple[TaskInstanceKey, CommandType, Optional[str], Optional[Any]]
 
 
-class LocalWorkerBase(Process, LoggingMixin):
+class LocalWorker(Process, LoggingMixin):
 
-    def __init__(self, result_queue: Queue[TaskInstanceStateType]):
+    def __init__(self, task_queue: Queue[ExecutorWorkType], result_queue: Queue[TaskInstanceStateType]):
         super().__init__(target=self.do_work)
         self.daemon: bool = True
         self.result_queue: Queue[TaskInstanceStateType] = result_queue
+        self.task_queue = task_queue
 
     def run(self):
         # We know we've just started a new process, so lets disconnect from the metadata db now
         settings.engine.pool.dispose()
         settings.engine.dispose()
-        setproctitle("airflow worker -- RadicalExecutor")
+        setproctitle("airflow worker -- {self.__class__.__name__}")
         return super().run()
 
     def execute_work(self, key: TaskInstanceKey, command: CommandType) -> None:
@@ -51,7 +51,7 @@ class LocalWorkerBase(Process, LoggingMixin):
             return
 
         self.log.info("%s running %s", self.__class__.__name__, command)
-        setproctitle(f"airflow worker -- RadicalExecutor: {command}")
+        setproctitle(f"airflow worker -- {self.__class__.__name__}: {command}")
         if settings.EXECUTE_TASKS_NEW_PYTHON_INTERPRETER:
             state = self._execute_work_in_subprocess(command)
         else:
@@ -59,7 +59,7 @@ class LocalWorkerBase(Process, LoggingMixin):
 
         self.result_queue.put((key, state))
         # Remove the command since the worker is done executing the task
-        setproctitle("airflow worker -- RadicalExecutor")
+        setproctitle(f"airflow worker -- {self.__class__.__name__}")
 
     def _execute_work_in_subprocess(self, command: CommandType) -> TaskInstanceState:
         try:
@@ -106,29 +106,6 @@ class LocalWorkerBase(Process, LoggingMixin):
             logging.shutdown()
             os._exit(ret)
 
-    @abstractmethod
-    def do_work(self):
-        """Execute tasks; called in the subprocess."""
-        raise NotImplementedError()
-
-
-class LocalWorker(LocalWorkerBase):
-    def __init__(
-        self, result_queue: Queue[TaskInstanceStateType], key: TaskInstanceKey, command: CommandType
-    ):
-        super().__init__(result_queue)
-        self.key: TaskInstanceKey = key
-        self.command: CommandType = command
-
-    def do_work(self) -> None:
-        self.execute_work(key=self.key, command=self.command)
-
-
-class QueuedLocalWorker(LocalWorkerBase):
-    def __init__(self, task_queue: Queue[ExecutorWorkType], result_queue: Queue[TaskInstanceStateType]):
-        super().__init__(result_queue=result_queue)
-        self.task_queue = task_queue
-
     def do_work(self) -> None:
         while True:
             try:
@@ -148,6 +125,7 @@ class QueuedLocalWorker(LocalWorkerBase):
             finally:
                 self.task_queue.task_done()
 
+
 class ZmqLocalExecutor(BaseExecutor):
 
     is_local: bool = True
@@ -157,11 +135,11 @@ class ZmqLocalExecutor(BaseExecutor):
 
     def __init__(self, parallelism: int = PARALLELISM):
         super().__init__(parallelism=parallelism)
-        if self.parallelism < 0:
-            raise AirflowException("parallelism must be bigger than or equal to 0")
+        if self.parallelism <= 1:
+            raise AirflowException(f"{self.__class__.__name__} parallelism must be > 1")
         self.manager: SyncManager | None = None
         self.result_queue: Queue[TaskInstanceStateType] | None = None
-        self.workers: list[QueuedLocalWorker] = []
+        self.workers: list[LocalWorker] = []
         self.workers_used: int = 0
         self.workers_active: int = 0
         self.queue: Queue[ExecutorWorkType] | None = None
@@ -169,7 +147,7 @@ class ZmqLocalExecutor(BaseExecutor):
     def start(self) -> None:
         """Start the executor."""
         old_proctitle = getproctitle()
-        setproctitle("airflow executor -- RadicalExecutor")
+        setproctitle(f"airflow executor -- {self.__class__.__name__}")
         self.manager = Manager()
         setproctitle(old_proctitle)
         self.result_queue = self.manager.Queue()
@@ -179,7 +157,7 @@ class ZmqLocalExecutor(BaseExecutor):
 
         self.queue = self.manager.Queue()
         self.workers = [
-            QueuedLocalWorker(self.queue, self.result_queue)
+            LocalWorker(self.queue, self.result_queue)
             for _ in range(self.parallelism)
         ]
 
@@ -211,7 +189,7 @@ class ZmqLocalExecutor(BaseExecutor):
 
     def end(self) -> None:
         self.log.info(
-            "Shutting down RadicalExecutor"
+            f"Shutting down {self.__class__.__name__}"
             "; waiting for running tasks to finish.  Signal again if you don't want to wait."
         )
 
