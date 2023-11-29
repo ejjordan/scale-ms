@@ -58,10 +58,37 @@ def clear_db_dags():
         session.query(DagOwnerAttributes).delete()
         session.query(DagModel).delete()
 
+def clear_db_dag_code():
+    with create_session() as session:
+        session.query(DagCode).delete()
+
+def clear_db_xcom():
+    with create_session() as session:
+        session.query(XCom).delete()
+
+
+def clear_db_jobs():
+    with create_session() as session:
+        session.query(Job).delete()
+
+
+def clear_db_task_fail():
+    with create_session() as session:
+        session.query(TaskFail).delete()
+
+def clear_db_logs():
+    with create_session() as session:
+        session.query(Log).delete()
+
 def clean_database():
     """Fixture that cleans the database before and after every test."""
     clear_db_runs()
     clear_db_datasets()
     clear_db_dags()
+    clear_db_dag_code()
+    clear_db_xcom()
+    clear_db_jobs()
+    clear_db_task_fail()
+    clear_db_logs()
 
 clean_database()

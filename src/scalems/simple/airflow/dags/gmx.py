@@ -1,66 +1,70 @@
-from scalems.simple.airflow.operators.radical_operator import RadicalPythonOperator, radical_task
-
 from airflow import DAG
-from airflow.decorators import dag, task
+from airflow.decorators import task
 from airflow.utils import timezone
 
-
-@radical_task
-def run_grompp(input_gro: str, verbose: bool = False):
-    import os
-    import gmxapi as gmx
-    input_dir='/home/joe/experiments/radical/alanine-dipeptide'
-    input_top = os.path.join(input_dir, "topol.top")
-    input_mdp = os.path.join(input_dir, "grompp.mdp")
-    input_gro = os.path.join(input_dir, input_gro)
-    input_files={'-f': input_mdp, '-p': input_top, '-c': input_gro,},
-    tpr = "run.tpr"
-    output_files={'-o': tpr}
-    grompp = gmx.commandline_operation(gmx.commandline.cli_executable(), 'grompp', input_files, output_files)
-    grompp.run()
-    if verbose:
-        print(grompp.output.stderr.result())
-    assert os.path.exists(grompp.output.file['-o'].result())
-    return grompp.output.file['-o'].result()
-
-"""
-grompp_task = RadicalPythonOperator(
-            task_id="run_grompp",
-            python_callable=run_grompp,
-            #params={"input_gro": "equil3.gro"},
-        )
-"""
+from scalems.simple.airflow.dags.tasks import run_grompp, run_mdrun
 
 @task
-def run_mdrun(tpr_path, verbose: bool = False):
-    import os
-    import gmxapi as gmx
-    if not os.path.exists(tpr_path):
-        raise FileNotFoundError("You must supply a tpr file")
+def protein_com_hdf5(input_files, output_files):
+    import MDAnalysis as mda
+    import h5py, os
 
-    input_files={'-s': tpr_path}
-    output_files={'-x':'alanine-dipeptide.xtc', '-c': 'result.gro'}
-    md = gmx.commandline_operation(gmx.commandline.cli_executable(), 'mdrun', input_files, output_files)
-    md.run()
-    if verbose:
-        print(md.output.stderr.result())
-    assert os.path.exists(md.output.file['-c'].result())
-    return md.output.file['-c'].result()
+    u = mda.Universe(input_files["gro"], input_files["xtc"])
+    prot = u.select_atoms("protein")
+    prot_com = prot.center_of_mass()
+    if not os.path.exists(output_files["output_dir"]):
+        os.makedirs(output_files["output_dir"])
+
+    output_file = os.path.join(output_files["output_dir"], output_files["hdf5"])
+    with h5py.File(output_file, "w") as f:
+        f.create_dataset("protein_com", data=prot_com)
+
+    return output_file
+
+@task
+def protein_cog_hdf5(input_files, output_files):
+    import MDAnalysis as mda
+    import h5py, os
+
+    u = mda.Universe(input_files["gro"], input_files["xtc"])
+    prot = u.select_atoms("protein")
+    prot_cog = prot.center_of_geometry()
+    if not os.path.exists(output_files["output_dir"]):
+        os.makedirs(output_files["output_dir"])
+
+    output_file = os.path.join(output_files["output_dir"], output_files["hdf5"])
+    with h5py.File(output_file, "w") as f:
+        f.create_dataset("protein_cog", data=prot_cog)
+
+    return output_file
+
+@task
+def protein_mass(input_files):
+    import MDAnalysis as mda
+
+    u = mda.Universe(input_files["gro"], input_files["xtc"])
+    prot = u.select_atoms("protein")
+    prot_mass = prot.total_mass()
+
+    return prot_mass
+
+@task.branch
+def decide_calculation(prot_mass):
+    if prot_mass > 150:
+        return "protein_com_hdf5"
+    else:
+        return "protein_cog_hdf5"
 
 with DAG('run_gmxapi', start_date=timezone.utcnow(), catchup=False) as dag:
-    grompp=run_grompp("equil3.gro")
-    mdrun=run_mdrun(grompp)
+    grompp_result=run_grompp("equil3.gro", "outputs")
+    mdrun_result=run_mdrun(grompp_result['-o'], "outputs")
 
-"""
-@dag(
-    schedule=None,
-    start_date=timezone.utcnow(),
-    catchup=False,
-    tags=["gmxapi_task"],
-)
-def run_gmxapi():
-    grompp=run_grompp("equil3.gro")
-    mdrun=run_mdrun(grompp)
+    protein_mass_result=protein_mass({'gro': mdrun_result['-c'], 'xtc': mdrun_result['-x']})
+    calc_decider=decide_calculation(protein_mass_result)
 
-#output=run_gmxapi()
-"""
+    com = protein_com_hdf5({'gro': mdrun_result['-c'], 'xtc': mdrun_result['-x']},
+        {'hdf5': 'com.hdf5', 'output_dir': 'outputs'})
+    cog = protein_cog_hdf5({'gro': mdrun_result['-c'], 'xtc': mdrun_result['-x']},
+        {'hdf5': 'cog.hdf5', 'output_dir': 'outputs'})
+    calc_decider.set_downstream(com)
+    calc_decider.set_downstream(cog)
